@@ -109,8 +109,8 @@ function initSocket() {
     alert(`Игрок ${username} покинул игру`);
   });
 
-  socket.on('levelComplete', (level) => {
-    alert(`Уровень пройден! Вы переходите на уровень ${level}`);
+  socket.on('levelComplete', ({ level, goal }) => {
+    alert(`Уровень пройден! Вы переходите на уровень ${level}: ${goal}`);
   });
 
   socket.on('gameEnd', () => {

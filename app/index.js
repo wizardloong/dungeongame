@@ -29,7 +29,7 @@ const mistral = new Mistral({ apiKey: process.env.MISTRAL_API_KEY });
 const hf = new HfInference(process.env.HF_API_KEY);
 
 // Режим отладки - для запуска игры с одним игроком
-const DEBUG_MODE = process.env.DEBUG_MODE === 'true' || true; // Принудительно включаем режим отладки
+const DEBUG_MODE = process.env.DEBUG_MODE === 'true' || false; // Принудительно включаем режим отладки
 log(`DEBUG_MODE: ${DEBUG_MODE}`);
 
 // Статические файлы
@@ -75,7 +75,20 @@ fs.access(fallbackImagePath)
 const rooms = {};
 
 // Системный промпт для GM
-const systemPrompt = `Ты - мастер игры в тёмном фэнтези подземелье. Игра ${DEBUG_MODE ? 'в режиме отладки на 1 игрока' : 'на 3 игроков'}, цель - пройти 5 уровней, каждый сложнее предыдущего. В конце 5-го - босс. Описывай ситуации кратко, красиво, до 150 символов. Не используй Markdown. Реагируй на действия игроков ("use", "cancel", "say"). Сложность растёт: level {level}. Текущая ситуация: {history}.`;
+const systemPrompt = `Ты - мастер игры в тёмном фэнтези подземелье. Игра ${DEBUG_MODE ? 'в режиме отладки на 1 игрока' : 'на 3 игроков'}, цель - пройти 5 уровней.
+
+КОНТЕКСТ:
+- Текущий уровень: {level}
+- Цель уровня: {levelGoal}
+- Память игры: {gameMemory}
+- Последние события: {recentHistory}
+
+ИНСТРУКЦИИ:
+1. Всегда помни контекст и историю
+2. Кратко описывай ситуации (до 150 симв.)
+3. Реагируй на действия: "use", "cancel", "say"
+4. Ссылайся на предыдущие события
+5. Сложность растёт с уровнем`;
 
 // Генерация изображения
 async function generateImage(description) {
@@ -140,7 +153,14 @@ io.on('connection', (socket) => {
     
     rooms[roomId] = { 
         players: [socket], 
-        state: { level: 1, turn: 'gm', history: [] } 
+        state: { 
+            level: 1, 
+            turn: 'gm', 
+            history: [],
+            levelGoals: {}, // Используем объект вместо массива
+            gameMemory: [],
+            levelMemory: ""
+        } 
     };
     
     socket.join(roomId);
@@ -423,16 +443,26 @@ async function getGmResponse(room, isInitial = false) {
       ? "Перед вами темный вход в древнее подземелье. Массивные каменные двери покрыты рунами и мхом. Холодный воздух веет из черного проема. Слышны странные звуки из глубины." 
       : "Вы продвигаетесь глубже. Факелы на стенах горят синим пламенем, освещая мрачный коридор. Впереди виднеется развилка путей и слышно тихое рычание.";
   }
-  
-  const prompt = systemPrompt
-    .replace('{level}', room.state.level)
-    .replace('{history}', room.state.history.join('\n'));
     
   const userMessage = isInitial ? 
     'Начни игру: опиши вход в подземелье.' : 
     'Опиши результат действий и новую ситуацию.';
   
   try {
+    // Обновляем память перед генерацией ответа
+    await updateGameMemory(room);
+    
+    // Формируем контекст памяти
+    const levelGoal = room.state.levelGoals[room.state.level] || "Пройти этот уровень";
+    const gameMemory = room.state.gameMemory.slice(-3).map(m => m.summary).join('\n') || "Начало приключения";
+    const recentHistory = room.state.history.join('\n') || "Событий пока нет";
+    
+    const prompt = systemPrompt
+        .replace('{level}', room.state.level)
+        .replace('{levelGoal}', levelGoal)
+        .replace('{gameMemory}', gameMemory)
+        .replace('{recentHistory}', recentHistory);
+
     log(`Отправка запроса к Mistral API`);        
     // Вариант 3: Используем полностью альтернативный синтаксис
     log(`Пробуем метод API v3...`);
@@ -576,6 +606,106 @@ function nextTurn(roomId) {
     log(`Переход хода к игроку ${currentTurn}`);
     io.to(roomId).emit('playerTurn', currentTurn);
   }
+
+  if (gmResponse.toLowerCase().includes('level complete')) {
+        room.state.level++;
+        room.state.history = [];
+        room.state.levelMemory = "";
+        
+        // Формируем сообщение о новом уровне
+        const levelGoal = room.state.levelGoals[room.state.level] || "Новая цель будет определена";
+        io.to(roomId).emit('levelComplete', {
+            level: room.state.level,
+            goal: levelGoal
+        });
+    }
+
+}
+
+async function fetchMistral(messages) {
+    try {
+        const response = await fetch("https://api.mistral.ai/v1/chat/completions", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${process.env.MISTRAL_API_KEY}`
+            },
+            body: JSON.stringify({
+                model: "mistral-large-latest",
+                messages: messages,
+                max_tokens: 100
+            })
+        });
+
+        const data = await response.json();
+        return data.choices[0]?.message?.content?.trim() || "";
+    } catch (err) {
+        log(`Ошибка запроса к Mistral: ${err}`);
+        return "";
+    }
+}
+
+async function updateGameMemory(room) {
+    if (process.env.FAST_DEBUG === 'true') {
+        // Заглушка для режима отладки
+        if (!room.state.levelGoals[room.state.level]) {
+            room.state.levelGoals[room.state.level] = `Пройти уровень ${room.state.level}`;
+        }
+        return;
+    }
+    
+    try {
+        log(`Обновление памяти для уровня ${room.state.level}`);
+        
+        // 1. Создаем цель уровня, если ее нет
+        if (!room.state.levelGoals[room.state.level]) {
+            const goalPrompt = `Игроки находятся на уровне ${room.state.level} темного фэнтези подземелья. Основная цель - пройти 5 уровней. Придумай конкретную цель для этого уровня (1 предложение).`;
+            
+            const response = await fetchMistral([{ role: "user", content: goalPrompt }]);
+            const goal = response || `Исследовать уровень ${room.state.level}`;
+            
+            room.state.levelGoals[room.state.level] = goal;
+            log(`Установлена цель уровня: ${goal}`);
+        }
+        
+        // 2. Сжимаем историю, если она слишком длинная
+        if (room.state.history.length > 4) {
+            const summaryPrompt = `Создай очень краткое резюме (1 предложение) этих событий:\n${room.state.history.slice(-4).join('\n')}`;
+            
+            const response = await fetchMistral([{ role: "user", content: summaryPrompt }]);
+            const summary = response || "Игроки продвигаются вперед";
+            
+            room.state.gameMemory.push({
+                level: room.state.level,
+                summary: summary,
+                timestamp: Date.now()
+            });
+            
+            // Оставляем только последние 2 события
+            room.state.history = room.state.history.slice(-2);
+            log(`Добавлено в память: ${summary}`);
+        }
+        
+        // 3. Сжимаем долгосрочную память
+        if (room.state.gameMemory.length > 3) {
+            const memoryPrompt = `Сожми эти воспоминания в одно краткое предложение:\n${
+                room.state.gameMemory.map(m => m.summary).join('\n')
+            }`;
+            
+            const response = await fetchMistral([{ role: "user", content: memoryPrompt }]);
+            const compressed = response || "Ключевые события путешествия";
+            
+            // Оставляем сжатую версию
+            room.state.gameMemory = [{
+                level: room.state.level,
+                summary: compressed,
+                timestamp: Date.now()
+            }];
+            log(`Память сжата: ${compressed}`);
+        }
+    } catch (err) {
+        log(`Ошибка обновления памяти: ${err.message}`);
+    }
 }
 
 // Бот: Кнопка для Mini App
