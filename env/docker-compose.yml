@@ -12,3 +12,4 @@ services:
       - .env:/app/.env
     environment:
       - NODE_ENV=production
+      - DEBUG_MODE=true
