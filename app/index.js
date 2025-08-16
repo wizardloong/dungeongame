@@ -29,7 +29,7 @@ const mistral = new Mistral({ apiKey: process.env.MISTRAL_API_KEY });
 const hf = new HfInference(process.env.HF_API_KEY);
 
 // Режим отладки - для запуска игры с одним игроком
-const DEBUG_MODE = process.env.DEBUG_MODE === 'true' || true; // Принудительно включаем режим отладки
+const DEBUG_MODE = process.env.DEBUG_MODE === 'true' || false; // Принудительно включаем режим отладки
 log(`DEBUG_MODE: ${DEBUG_MODE}`);
 
 // Статические файлы
