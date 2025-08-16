@@ -4,7 +4,7 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "debug": "DEBUG_MODE=true node index.js"
+    "debug": "DEBUG_MODE=false node index.js"
   },
   "dependencies": {
     "@huggingface/inference": "^2.6.7",
