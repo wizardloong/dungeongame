@@ -248,7 +248,7 @@ io.on('connection', (socket) => {
       // Обработка сообщений чата
       log(`Обработка сообщения чата от ${socket.username}: ${text}`);
       io.to(roomId).emit('sayMessage', { from: socket.username, text });
-    } else {
+    }
       // Обработка игровых действий
       log(`Обработка игрового действия от ${socket.username}: ${type} - ${text}`);
       room.state.history.push(`${socket.username} ${type}: ${text}`);
@@ -270,7 +270,7 @@ io.on('connection', (socket) => {
         log(`Ошибка при обработке действия: ${err}`);
         socket.emit('error', { message: 'Произошла ошибка при обработке действия' });
       }
-    }
+    
   });
 
   // Отключение игрока

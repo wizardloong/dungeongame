@@ -88,6 +88,8 @@ function initSocket() {
   socket.on('playerTurn', (turnIndex) => {
     // turnIndex: 1,2,3 - номер игрока (не индекс массива!)
     const playerIndex = turnIndex - 1; // Преобразуем в индекс массива
+    console.log(myTurnIndex, playerIndex);
+    messages.innerHTML = '';
     
     if (playerIndex === myTurnIndex) {
       enableButtons();
